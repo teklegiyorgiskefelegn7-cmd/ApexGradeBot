@@ -1,24 +1,26 @@
 import os
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
 
-# 1. መዝገብ (Logging) - ስህተቶችን ለመከታተል
+# 1. መዝገብ (Logging) - ስህተትን ለመከታተል
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# 2. አንተ የላክሃቸው ቁልፎች (API Keys)
-TELEGRAM_BOT_TOKEN = "8264772001:AAFKRYNh_YRbbBv-VDO8UvxHOrqbrjf7Q9U"
-GEMINI_API_KEY = "AIzaSyAm_1CSE9hDA1GQqy8AM5VOnULBPteP6AI"
-CHANNEL_USERNAME = "@ApexGradeEthiopia"
+# 2. ቁልፎችን ከ Render Environment መቀበል
+# ማሳሰቢያ፡ ቁልፎቹን እዚህ ኮድ ውስጥ አትጻፋቸው፤ Render ላይ በሞላኸው መሰረት ይሰራሉ
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+CHANNEL_USERNAME = "@ApexGradeEthiopia"  # የቻናልህ ስም
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+# እዚህ ጋር 1.5-flash በማድረጋችን የ Quota ስህተቱ ይጠፋል
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# 3. ሰብስክራይብ ማድረጋቸውን የሚያረጋግጥ ተግባር
+# 3. በቻናል ሰብስክራይብ ማድረጋቸውን ማረጋገጫ
 async def is_subscribed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     try:
@@ -31,8 +33,7 @@ async def is_subscribed(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Join Channel 📢", url=f"https://t.me/{CHANNEL_USERNAME[1:]}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"⚠️ ቦቱን ለመጠቀም መጀመሪያ የ {CHANNEL_USERNAME} ቤተሰብ መሆን አለብህ።\n"
-        "እባክህ Join በልና ድጋሚ ሞክር!",
+        f"⚠️ ቦቱን ለመጠቀም መጀመሪያ የ {CHANNEL_USERNAME} ቤተሰብ መሆን አለብህ!\nእባክህ Join ብለህ በድጋሚ ሞክር።",
         reply_markup=reply_markup
     )
     return False
@@ -42,11 +43,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_subscribed(update, context):
         user_name = update.effective_user.first_name
         await update.message.reply_text(
-            f"ሰላም {user_name}! እንኳን ወደ Apex Grade Ethiopia በሰላም መጣህ።\n"
-            "የፈለግከውን ጥያቄ መጠየቅ ወይም PDF ፋይል መላክ ትችላለህ።"
+            f"ሰላም {user_name}! እንኳን ወደ Apex Grade Ethiopia በሰላም መጣህ።\nየፈለግከውን ጥያቄ መጠየቅ ወይም PDF ፋይል መላክ ትችላለህ።"
         )
 
-# 5. ጥያቄዎችን ማስተናገድ
+# 5. የጽሁፍ ጥያቄዎችን ማስተናገጃ
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_subscribed(update, context):
         return
@@ -55,32 +55,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sent_message = await update.message.reply_text("በማሰብ ላይ ነኝ... ⏳")
 
     try:
-        response = model.generate_content(f"እንደ ኢትዮጵያ ዩኒቨርሲቲ መምህር በመሆን ለዚህ ጥያቄ ግልጽ መልስ ስጥ፡ {user_text}")
+        # ለተማሪዎች እንዲመች ማንነቱን መግለጽ
+        prompt = f"አንተ ለኢትዮጵያ ተማሪዎች የተዘጋጀህ 'Apex Grade AI' ነህ። ለሚከተለው ጥያቄ ግልጽ መልስ ስጥ፦ {user_text}"
+        response = model.generate_content(prompt)
         await sent_message.edit_text(response.text)
     except Exception as e:
-        await sent_message.edit_text("ይቅርታ፣ መልሱን በማመንጨት ላይ ስህተት ተፈጥሯል። እባክህ ቆይተህ ሞክር።")
+        await sent_message.edit_text("ይቅርታ፣ መልስ በማመንጨት ላይ ስህተት ተፈጥሯል። እባክህ ትንሽ ቆይተህ ሞክር።")
         logging.error(f"Gemini Error: {e}")
 
-# 6. PDF ፋይሎችን ማስተናገድ
+# 6. PDF ፋይሎችን ማስተናገጃ (ለወደፊቱ)
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await is_subscribed(update, context):
         return
-
-    document = update.message.document
-    if document.mime_type == 'application/pdf':
-        sent_message = await update.message.reply_text("PDF ፋይሉ ደርሶኛል፣ እያነበብኩት ነው... 📖")
-        # ለወደፊቱ እዚህ ጋር የፋይል ንባብ ዝርዝር ኮድ ይጨመራል
-        await sent_message.edit_text("ፋይሉን ተቀብያለሁ! አሁን ከዚህ PDF ምን ማወቅ ትፈልጋለህ? ጥያቄህን መጠየቅ ትችላለህ።")
-    else:
-        await update.message.reply_text("እባክህ PDF ፋይል ብቻ ላክልኝ።")
+    await update.message.reply_text("PDF ፋይል ተቀብያለሁ! በቅርቡ PDF የማንበብ አገልግሎት እጀምራለሁ።")
 
 if __name__ == '__main__':
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(MessageHandler(filters.ALL, start))
-
-    print("Apex Grade Bot is running...")
-    application.run_polling()
+    if not TELEGRAM_BOT_TOKEN:
+        print("Error: TELEGRAM_BOT_TOKEN not found in environment variables!")
+    else:
+        application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        application.add_handler(CommandHandler('start', start))
+        application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+        application.add_handler(MessageHandler(filters.Document.PDF, handle_document))
+        
+        print("Bot is running...")
+        application.run_polling()
